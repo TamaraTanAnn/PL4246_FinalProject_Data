@@ -1,0 +1,495 @@
+---
+title: "PL4246_finalproject"
+output:
+  pdf_document: default
+  html_document: default
+date: "2022-10-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("~/Dropbox/My Mac (Tamaras-Air.ms2002.thruhere.net)/Desktop/PL4246/finalproject")
+```
+
+```{r}
+#install.packages("tm")
+#install.packages("tmap")
+#install.packages("udpipe")
+#install.packages("openNLP")
+#install.packages("openNLPdata")
+#install.packages("groupdata2")
+#install.packages("cooccur")
+#install.packages("corpus")
+#install.packages("RColorBrewer")
+```
+
+```{r}
+library(tidyverse)
+library(igraph)
+library(igraphdata)
+library(influenceR)
+library(stringr)
+library(udpipe)
+library(dplyr)
+library(openNLP)
+library(openNLP)
+library(groupdata2)
+library(cooccur)
+#library(RColorBrewer)
+```
+
+
+#download language model
+```{r}
+#udmodel <- udpipe_download_model(language = "english")
+m_eng   <- udpipe::udpipe_download_model(language = "english-ewt")
+
+#load language model 
+xm_eng <- udpipe_load_model(file =  "english-ewt-ud-2.5-191206.udpipe")
+```
+
+#get list of all txt files 
+```{r}
+songs_list <- list.files("lyrics", pattern = "\\.txt")
+#songs_list
+```
+
+#creating empty dataframe to store strings
+```{r}
+lyrics.dat <- data.frame(matrix(ncol=1, nrow=length(songs_list)))
+colnames(lyrics.dat) <- 'songs'
+
+head(lyrics.dat)
+
+```
+
+#converting each txt file into string & storing into dataframe
+```{r}
+#rm(list=ls())
+
+for(i in 1:length(songs_list)) {
+  
+  lyrics.dat[i, 1] <- readLines(paste0("lyrics/", songs_list[i])) |> paste(collapse = " ")
+}
+
+head(lyrics.dat)
+
+```
+
+#tagging each song 
+```{r}
+lyric_tag <- function() {
+
+  dflist <- list() #create list to store dfs
+  
+for(i in 1:length(lyrics.dat$songs)) {
+  
+      #tag, tokenise 
+        tags <- udpipe::udpipe_annotate(xm_eng, x = lyrics.dat$songs[i]) %>%                                
+          as.data.frame() %>%
+         dplyr::select(-sentence) %>%
+        mutate(upos = case_when(lemma == c('I') ~ 'FPS/noun', #renaming pronouns
+                                lemma == c('my') ~ 'FPS/noun',
+                                lemma == c('we') ~ 'FPP/noun',
+                                lemma == c('our') ~ 'FPP/noun',
+                            TRUE ~ as.character(upos)
+                           )) %>%
+          filter( !(upos %in% c("DET", "PUNCT")) ) #removing unnecessary variables
+      
+      dflist[[i]] <- tags #saving multiple dataframes in a list 
+ 
+    }
+  return(dflist)
+}
+
+head(lyric_tag())
+
+#storing output into a variable 
+var_lyric <- lyric_tag()
+
+```
+
+
+#converting back to text 
+```{r}
+lyric.list <- list()
+ for (i in 1: length(var_lyric)) {
+   
+   tagged_text <- paste(var_lyric[[i]]$token, "/", var_lyric[[i]]$upos, collapse = " ", sep = "" )
+   
+   lyric.list[i] <- tagged_text
+ }
+
+#head(lyric.list)
+```
+
+#converting list of songs into single dataframe 
+```{r}
+
+songs.dat <- do.call(rbind.data.frame, lyric.list) 
+                
+#renaming column
+songs.dat <-  setNames(songs.dat, c("songs"))
+
+#create a year column 
+year <- c(2000 : 2019)
+songs.dat$year <- rep(year, each = 5)   
+
+head(songs.dat)
+
+```
+
+#creating list of dataframes based on each year 
+```{r}
+list.dat <- split(songs.dat, f = songs.dat$year)  
+
+#head(list.dat)       
+
+```
+
+#convert each year's dataframe into string 
+```{r}
+
+list.string <- list()
+
+for (i in 1:length(list.dat)) {
+
+  list.string[i] <- paste(unlist(list.dat[[i]]$songs), collapse =" ")
+
+}
+
+#head(list.string)
+```
+
+
+#create edgelist and store in dataframe
+```{r}
+cooccurNet <- function(singlestring) {
+  
+  #  singlestring <- list.string[[1]]
+  
+    # convert raw text into sentences 
+    x <- corpus::text_split(singlestring, units = "sentences", size =1)
+   
+    # split sentences into word vectors 
+    x$out <- sapply(1:nrow(x), function(i) {x$text[i] %>% as.character() %>% strsplit(split = ' ') })
+    
+    # compute max sentence length 
+    x$length <- sapply(1:nrow(x), function(i) {length(unlist(x$out[i]))})
+
+    
+    # updated code to manually get word co-occurrences from the sentences 
+    data_store <- data.frame(V1 = c(), V2 = c())
+    
+    for(j in 1:nrow(x)) {
+      
+      sentence_store <- x$out[j][[1]]
+      sentence_store <- stringi::stri_remove_empty(sentence_store) # remove empty cells 
+      
+      for(i in 1:(length(sentence_store)-1)) { # brute force 
+        data_store <- rbind(data_store, c(sentence_store[i], sentence_store[i+1]))
+      }
+      
+    }
+    
+    data_store
+}
+
+
+# dataframes list
+df.list <- lapply(list.string, cooccurNet)
+
+head(df.list)
+```
+
+#igraph list
+```{r}
+igraph <- function(data_store){
+ 
+  g <- graph_from_data_frame(data_store, directed = FALSE) 
+    
+ E(g)$weight <- 1
+    
+    g <- igraph::simplify(g, edge.attr.comb = list(weight="sum")) # to merge multiedges into a single weighted edge 
+
+    return(g)
+}
+
+igraphs.list <- lapply(df.list, igraph)
+
+head(igraphs.list)
+
+
+```
+
+#visualization 
+```{r}
+   
+graphs <- function(y){
+
+  
+   #y <- igraphs.list[[1]]
+   
+   #V(y)$name
+
+ 
+  #plotting
+  par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+  
+  set.seed(123)
+
+ 
+    l <- layout_with_graphopt(y) # to fix layout 
+    
+    plot(y, layout = l, vertex.frame.color = 'black', 
+         vertex.size = 2, 
+         vertex.color = "purple",
+         vertex.label = NA,
+        vertex.label.dist = 1.5) 
+    
+  #return(network)
+}
+
+#net.list <- lapply(igraphs.list, graphs)
+#head(net.list)
+
+graphs(igraphs.list[[1]] )
+graphs(igraphs.list[[20]] )
+```
+
+#degree in network 
+```{r}
+
+dg <- function(x){
+  
+set.seed(123)
+  
+data.frame(
+  node = V(x)$name, 
+  degree = degree(graph = x)
+)}
+
+#lapply(igraphs.list, dg)
+
+#year 2000
+dg(igraphs.list[[1]] )
+view (dg(igraphs.list[[1]] ))
+
+#year 2019
+dg(igraphs.list[[20]] )
+view (dg(igraphs.list[[20]] ))
+```
+
+#visualization of degree 
+```{r}
+dg.graph <- function(g){
+  
+  #g <- igraphs.list[[20]]
+   l <- layout_with_graphopt(g) # to fix layout
+   set.seed(123)
+plot.igraph(g, layout=l, 
+            vertex.size= degree(g),    # Rescaled by multiplying by 1000
+            vertex.label = NA,
+            vertex.color = "yellow",
+            main="Degree")
+}
+
+lapply(igraphs.list, dg.graph)
+```
+
+#strength 
+```{r}
+st <- function(x){
+
+set.seed(123)
+  
+data.frame(
+  node = V(x)$name, 
+  strength = strength(x) %>% round(3)) %>% 
+    filter(node %in% c("I/FPS/noun", "my/FPS/noun", "we/FPP/noun", "our/FPP/noun"))
+
+}
+
+#lapply(igraphs.list, st)
+
+#year 2000
+st(igraphs.list[[1]] )
+
+#year 2019
+st(igraphs.list[[20]] )
+```
+#plotting 
+```{r}
+#combining list into single dataframe
+st.dat <- lapply(igraphs.list, st)
+st.dat2 <- bind_rows(st.dat, .id = "Years")
+head(st.dat2)
+
+#plotting
+set.seed(123)
+ggplot( st.dat2, 
+        aes( x = as.numeric(Years), y = strength, color = node)) +
+      xlab("Years") +
+      ylab("Strength") +
+  geom_line()+
+  geom_point(aes(shape = node), size = 2) + 
+  scale_x_continuous(breaks=c(1,5,10,15,20)) +
+    theme_light()
+```
+#visualization of strength 
+```{r}
+st.graph <- function(g){
+  
+ # g <- igraphs.list[[20]]
+   l <- layout_with_graphopt(g) # to fix layout
+   set.seed(123)
+plot.igraph(g, layout=l, 
+            vertex.size= strength(g)/10,    # Rescaled by multiplying by 1000
+            vertex.label = NA,
+            vertex.color = "coral",
+            main="Strength")
+}
+
+lapply(igraphs.list, st.graph)
+```
+
+#closeness centrality
+```{r}
+cc <- function(y){
+  set.seed(123)
+  
+ data.frame(
+    node = V(y)$name, 
+    closeness = closeness(graph = y, normalized = T, weights = E(y)$weight) %>% round(3)) %>%
+   filter(node %in% c("I/FPS/noun", "my/FPS/noun", "we/FPP/noun", "our/FPP/noun"))
+
+}
+
+#lapply(igraphs.list, cc)
+
+#year 2000
+cc(igraphs.list[[1]] )
+
+#year 2019
+cc(igraphs.list[[20]] )
+
+```
+
+#plotting 
+```{r}
+#combining list into single dataframe
+cc.dat <- lapply(igraphs.list, cc)
+cc.dat2 <- bind_rows(cc.dat, .id = "Years")
+head(cc.dat2)
+
+#plotting
+set.seed(123)
+ggplot( cc.dat2, 
+        aes( x = as.numeric(Years), y = closeness, color = node)) +
+      xlab("Years") +
+      ylab("Closeness Centrality") +
+  geom_line()+
+  geom_point(aes(shape = node), size = 2) + 
+  scale_x_continuous(breaks=c(1,5,10,15,20)) +
+    theme_light()
+
+```
+#visualization of closeness centrality 
+```{r}
+cc.graph <- function(g){
+  
+  #g <- igraphs.list[[1]]
+   l <- layout_with_graphopt(g) # to fix layout
+   set.seed(123)
+plot.igraph(g, layout=l, 
+            vertex.size=closeness(g)*10000,    # Rescaled by multiplying by 1000
+            vertex.label = NA,
+            vertex.color = "lightblue",
+            main="Closeness (X 1000)")
+}
+
+lapply(igraphs.list, cc.graph)
+
+```
+
+#merged centrality 
+```{r}
+merge <- function(x){
+  data.frame(
+  node = V(x)$name,
+  degree = degree(graph = x),
+  strength = strength(graph = x),
+  closeness = closeness(graph = x, normalized = T) %>% round(3)) %>%
+   filter(node %in% c("I/FPS/noun", "my/FPS/noun", "we/FPP/noun","our/FPP/noun"))
+  
+}
+
+lapply(igraphs.list, merge)
+```
+
+#community detection: Louvain method 
+```{r}
+
+louvain <- function(t) {
+set.seed(123)
+
+t.louvain <- cluster_louvain(t, weights = E(t)$weight)
+
+# membership of nodes in each community 
+t.lm <- data.frame(node = 1:gorder(t), community = t.louvain$membership)
+
+print(table(t.lm$community) )
+
+# modularity of the network 
+print(modularity(t.louvain) )
+
+#plotting
+par(mar=c(0,0,0,0)+.1) # to reduce the margins 
+set.seed(8) # to get the same network layout 
+
+V(t)$community <- t.louvain$membership # assign community membership as a node attribute 
+
+plot(t, vertex.color=V(t)$community, # automatically assign colors to communities
+  vertex.size = 3, vertex.frame.color = 'black', vertex.label = NA,
+        layout = layout_with_lgl)
+
+}
+
+#lapply(igraphs.list, louvain)
+
+#year 2000
+louvain(igraphs.list[[1]] )
+
+#year 2019
+louvain(igraphs.list[[20]] )
+
+```
+
+#plotting modularity
+```{r}
+mod.lv <- function(t) {
+set.seed(123)
+
+t.louvain <- cluster_louvain(t, weights = E(t)$weight)
+
+# modularity of the network 
+modularity(t.louvain)  }
+
+#combining list into single dataframe
+mod.list <- lapply(igraphs.list, mod.lv)
+mod.dat <- data.frame(t(sapply(mod.list,c)))
+colnames(mod.dat) <- c("2000", "2001","2002","2003", "2004", "2005","2006","2007", "2008", "2009","2010", "2011","2012","2013","2014","2015","2016","2017","2018", "2019")
+head(mod.dat)
+
+library(reshape)
+mod.dat2 <- melt(mod.dat[, 1:ncol(mod.dat)])
+ggplot(mod.dat2, aes(x = as.numeric(variable), y = value)) + 
+      xlab("Years") +
+      ylab("Modularity") +
+  geom_line() + 
+  theme_gray()
+```
+
